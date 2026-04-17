@@ -1,7 +1,7 @@
 # VinFast Assistant - Deployment Information
 
 ## Public URL
-https://vinfast-assistant-production.up.railway.app
+https://day12-agent-deployment-production-32c1.up.railway.app
 
 ## Platform
 Railway (using Nixpacks for Python deployment)
@@ -10,13 +10,13 @@ Railway (using Nixpacks for Python deployment)
 
 ### Health Check
 ```bash
-curl https://vinfast-assistant-production.up.railway.app/health
+curl https://day12-agent-deployment-production-32c1.up.railway.app/health
 # Expected: {"status": "ok", "timestamp": "...", "uptime_seconds": 123, "version": "2.0.0"}
 ```
 
 ### API Test (with authentication)
 ```bash
-curl -X POST https://vinfast-assistant-production.up.railway.app/ask \
+curl -X POST https://day12-agent-deployment-production-32c1.up.railway.app/ask \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"question": "How do I find charging stations?", "user_id": "test123"}'
@@ -26,7 +26,7 @@ curl -X POST https://vinfast-assistant-production.up.railway.app/ask \
 ### Rate Limiting Test
 ```bash
 # This should work (under limit)
-curl -X POST https://vinfast-assistant-production.up.railway.app/ask \
+curl -X POST https://day12-agent-deployment-production-32c1.up.railway.app/ask \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"question": "Hello", "user_id": "test123"}'
@@ -37,7 +37,7 @@ curl -X POST https://vinfast-assistant-production.up.railway.app/ask \
 
 ### Authentication Required Test
 ```bash
-curl -X POST https://vinfast-assistant-production.up.railway.app/ask \
+curl -X POST https://day12-agent-deployment-production-32c1.up.railway.app/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Hello", "user_id": "test123"}'
 # Expected: 401 Unauthorized
