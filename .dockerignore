@@ -1,6 +1,7 @@
-# Environment files
+# Environment files (NEVER ship these into the image)
 .env
 .env.local
+.env.production
 
 # Python
 __pycache__/
@@ -9,6 +10,8 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
+venv/
+.venv/
 
 # IDE
 .vscode/
@@ -22,17 +25,15 @@ Thumbs.db
 
 # Git
 .git/
-.gitignore
-
-# Docs
-*.md
 
 # Screenshots
 screenshots/
 
 # Logs
 *.log
+logs/
 
 # Temporary files
 .tmp/
 temp/
+*.tmp

@@ -9,8 +9,11 @@ services:
       - "8000:8000"
     environment:
       - ENVIRONMENT=production
-      - API_KEY_SECRET=your-secure-api-key-here
+      - AGENT_API_KEY=change-me-in-production
       - DAILY_BUDGET_USD=5.0
+      - RATE_LIMIT_MAX=10
+      - RATE_LIMIT_WINDOW=60
+      - LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

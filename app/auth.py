@@ -13,12 +13,13 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 def verify_api_key(api_key: str = Security(api_key_header)) -> str:
     """
-    Verify API key authentication
-    In production, this should validate against a database or auth service
+    Verify API key authentication.
+    Accepts AGENT_API_KEY (Railway/Render convention) or API_KEY_SECRET.
+    In production, this should validate against a database or auth service.
     """
-    expected_key = os.getenv("API_KEY_SECRET", "dev-api-key-change-in-production")
+    expected = os.getenv("AGENT_API_KEY") or os.getenv("API_KEY_SECRET", "dev-api-key-change-in-production")
 
-    if not api_key or api_key != expected_key:
+    if not api_key or api_key != expected:
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key. Include header: X-API-Key: <key>",

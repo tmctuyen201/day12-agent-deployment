@@ -1,97 +1,75 @@
 """
 VinFast Car Assistant - Production Ready API
-FastAPI application with comprehensive security and monitoring
+FastAPI application with comprehensive security and monitoring.
 """
 
-from fastapi import FastAPI, HTTPException, Request, Security, Depends
-from fastapi.security.api_key import APIKeyHeader
+import signal
+import sys
+import time
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-import time
 from datetime import datetime, timezone
 from typing import Optional
-import logging
-import json
+
+from app.auth import verify_api_key
+from app.rate_limiter import rate_limiter
+from app.cost_guard import cost_guard
+from utils.mock_llm import ask
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+import logging
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-# Environment variables
-PORT = int(os.getenv("PORT", "8000"))
-API_KEY_SECRET = os.getenv("API_KEY_SECRET", "dev-api-key-change-in-production")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+APP_VERSION = "2.0.0"
+START_TIME = time.time()
 
-# Rate limiting (simple in-memory for demo)
-RATE_LIMIT_REQUESTS = {}
-RATE_LIMIT_WINDOW = 60  # seconds
-RATE_LIMIT_MAX = 20  # requests per window
+# ── Graceful shutdown ─────────────────────────────────────────────────────────
+shutdown_requested = False
 
-# Cost guard
-DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", "5.0"))
-DAILY_COST = 0.0
-COST_RESET_DAY = time.strftime("%Y-%m-%d")
 
-# Create FastAPI app
+def handle_sigterm(signum, frame):
+    global shutdown_requested
+    logger.info("SIGTERM received — initiating graceful shutdown")
+    shutdown_requested = True
+
+
+signal.signal(signal.SIGTERM, handle_sigterm)
+signal.signal(signal.SIGINT, handle_sigterm)
+
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"VinFast Assistant starting (env={ENVIRONMENT})")
+    yield
+    logger.info("VinFast Assistant shutting down — all requests drained")
+
+
+# ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(
     title="VinFast Car Assistant API",
-    version="2.0.0",
+    version=APP_VERSION,
     description="Production-ready AI assistant for VinFast vehicles",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=["*"] if ENVIRONMENT == "development" else [],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# API Key authentication
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-
-def verify_api_key(api_key: str = Security(api_key_header)) -> str:
-    if not api_key or api_key != API_KEY_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return api_key
-
-
-# Rate limiting function
-def check_rate_limit(client_key: str) -> bool:
-    current_time = time.time()
-    if client_key not in RATE_LIMIT_REQUESTS:
-        RATE_LIMIT_REQUESTS[client_key] = []
-
-    # Clean old requests
-    RATE_LIMIT_REQUESTS[client_key] = [
-        req_time
-        for req_time in RATE_LIMIT_REQUESTS[client_key]
-        if current_time - req_time < RATE_LIMIT_WINDOW
-    ]
-
-    if len(RATE_LIMIT_REQUESTS[client_key]) >= RATE_LIMIT_MAX:
-        return False
-
-    RATE_LIMIT_REQUESTS[client_key].append(current_time)
-    return True
-
-
-# Cost guard function
-def check_and_track_cost() -> bool:
-    global DAILY_COST, COST_RESET_DAY
-    today = time.strftime("%Y-%m-%d")
-    if today != COST_RESET_DAY:
-        DAILY_COST = 0.0
-        COST_RESET_DAY = today
-
-    # Estimate cost per request (mock)
-    request_cost = 0.001  # $0.001 per request
-    if DAILY_COST + request_cost > DAILY_BUDGET:
-        return False
-
-    DAILY_COST += request_cost
-    return True
-
-
-# Pydantic models
+# ── Pydantic models ───────────────────────────────────────────────────────────
 class AgentRequest(BaseModel):
     question: str
     user_id: str = "anonymous"
@@ -105,108 +83,92 @@ class AgentResponse(BaseModel):
     timestamp: str
 
 
-# Mock responses for demo
-MOCK_RESPONSES = {
-    "charging": "You can find charging stations using the VinFast navigation system or mobile app. The nearest stations will show real-time availability.",
-    "maintenance": "Schedule maintenance through the VinFast app or contact your authorized dealer. Regular maintenance is important for vehicle safety.",
-    "features": "Your VinFast includes autonomous driving, premium audio system, smart connectivity, and advanced safety features.",
-    "default": "I'm your VinFast assistant. I can help with charging stations, maintenance schedules, vehicle features, and general questions about your VinFast vehicle.",
-}
-
-
-def get_mock_response(question: str) -> str:
-    """Simple keyword-based response matching"""
-    question_lower = question.lower()
-
-    if any(word in question_lower for word in ["charg", "battery", "electric"]):
-        return MOCK_RESPONSES["charging"]
-    elif any(word in question_lower for word in ["maintain", "service", "repair"]):
-        return MOCK_RESPONSES["maintenance"]
-    elif any(word in question_lower for word in ["feature", "capability", "function"]):
-        return MOCK_RESPONSES["features"]
-    else:
-        return MOCK_RESPONSES["default"]
-
-
-# API endpoints
+# ── Public endpoints ───────────────────────────────────────────────────────────
 @app.get("/")
 def root():
     return {
         "message": "VinFast Car Assistant API",
-        "version": "2.0.0",
+        "version": APP_VERSION,
         "environment": ENVIRONMENT,
         "endpoints": {
-            "health": "/health",
-            "ready": "/ready",
-            "ask": "POST /ask (requires X-API-Key)",
+            "health": "GET /health",
+            "ready":  "GET /ready",
+            "ask":    "POST /ask (requires X-API-Key)",
         },
     }
 
 
 @app.get("/health")
 def health():
-    """Liveness probe"""
+    """Liveness probe — always returns 200 if process is alive."""
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "uptime_seconds": time.time(),
-        "version": "2.0.0",
+        "uptime_seconds": round(time.time() - START_TIME, 1),
+        "version": APP_VERSION,
     }
 
 
 @app.get("/ready")
 def ready():
-    """Readiness probe"""
-    return {"ready": True}
+    """Readiness probe — returns 200 when app is ready to serve traffic."""
+    if shutdown_requested:
+        raise HTTPException(status_code=503, detail="Shutting down")
+    return {"ready": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+# ── Protected endpoints ────────────────────────────────────────────────────────
 @app.post("/ask", response_model=AgentResponse)
 def ask_agent(req: AgentRequest, api_key: str = Depends(verify_api_key)):
-    """Main agent endpoint with authentication, rate limiting, and cost guard"""
+    """Main agent endpoint — auth + rate-limit + cost-guard + LLM."""
 
-    # Rate limiting
-    if not check_rate_limit(api_key[:8]):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    # 1. Rate limiting (keyed by first 8 chars of API key)
+    client_key = api_key[:8]
+    if not rate_limiter.is_allowed(client_key):
+        reset_in = rate_limiter.get_reset_time(client_key)
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={
+                "X-RateLimit-Remaining": "0",
+                "Retry-After": str(reset_in),
+            },
+        )
 
-    # Cost guard
-    if not check_and_track_cost():
+    # 2. Cost guard
+    if not cost_guard.check_budget():
         raise HTTPException(status_code=503, detail="Daily budget exceeded")
 
-    # Log request
-    logger.info(f"Request from {req.user_id}: {req.question[:50]}...")
+    # 3. Log
+    logger.info(f"[{req.user_id}] question={req.question[:60]!r}")
 
-    # Get response
-    answer = get_mock_response(req.question)
+    # 4. Call LLM
+    answer = ask(req.question)
+
+    # 5. Record cost
+    cost_guard.record_cost()
 
     return AgentResponse(
         answer=answer,
-        confidence=0.85,
-        sources=["vehicle_manual", "service_database"],
+        confidence=0.90,
+        sources=["vehicle_manual", "vinfast_kb"],
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 
 @app.get("/metrics")
 def metrics(api_key: str = Depends(verify_api_key)):
-    """Protected metrics endpoint"""
+    """Protected metrics endpoint."""
+    budget = cost_guard.get_budget_status()
     return {
-        "daily_cost_usd": round(DAILY_COST, 4),
-        "daily_budget_usd": DAILY_BUDGET,
-        "budget_used_percent": round(DAILY_COST / DAILY_BUDGET * 100, 1)
-        if DAILY_BUDGET > 0
-        else 0,
-        "active_rate_limits": len(RATE_LIMIT_REQUESTS),
+        **budget,
+        "active_rate_limit_keys": rate_limiter.active_keys_count(),
         "environment": ENVIRONMENT,
     }
 
 
-# Graceful shutdown
-@app.on_event("shutdown")
-def shutdown_event():
-    logger.info("Application shutting down gracefully")
-
-
+# ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
